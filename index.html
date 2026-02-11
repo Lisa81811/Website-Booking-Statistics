@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Website Booking Analytics</title>
+  
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@300;400;600&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <!-- React and ReactDOM from CDN -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  
+  <!-- Recharts from CDN -->
+  <script src="https://unpkg.com/recharts@2.10.3/dist/Recharts.js"></script>
+  
+  <!-- Babel Standalone for JSX -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    
+    #root {
+      width: 100%;
+      min-height: 100vh;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    @keyframes fadeIn {
+      from { 
+        opacity: 0; 
+        transform: translateY(10px);
+      }
+      to { 
+        opacity: 1; 
+        transform: translateY(0); 
+      }
+    }
+
+    /* Loading screen */
+    .loading-screen {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      background: #fdfcfb;
+    }
+
+    .loading-content {
+      text-align: center;
+    }
+
+    .spinner {
+      width: 40px;
+      height: 40px;
+      margin: 0 auto 1rem;
+      border: 3px solid #e8e7e5;
+      border-top: 3px solid #2d5a3d;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+  </style>
+</head>
+<body>
+  <div id="root">
+    <div class="loading-screen">
+      <div class="loading-content">
+        <div class="spinner"></div>
+        <p style="color: #6b6b6b; font-size: 0.9rem;">Loading Dashboard...</p>
+      </div>
+    </div>
+  </div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+    const { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } = Recharts;
+
+    const Dashboard = () => {
+      const [activeTab, setActiveTab] = useState('overview');
+      const [datePickerOpen, setDatePickerOpen] = useState(false);
+      const [menuOpen, setMenuOpen] = useState(false);
+      const [dateRange, setDateRange] = useState({
+        start: new Date(new Date().setDate(new Date().getDate() - 28)),
+        end: new Date(),
+        label: 'Last 28 days'
+      });
+      const [customStartDate, setCustomStartDate] = useState('');
+      const [customEndDate, setCustomEndDate] = useState('');
+      const [loading, setLoading] = useState(false);
+      const [apiStatus, setApiStatus] = useState({
+        googleAnalytics: { connected: false, lastSync: null },
+        cloudbeds: { connected: false, lastSync: null }
+      });
+      const datePickerRef = useRef(null);
+      const menuRef = useRef(null);
+
+      // Sample data - will be replaced with API data
+      const [dashboardData, setDashboardData] = useState({
+        websiteTraffic: {
+          sessions: 12847,
+          pageViews: 45623,
+          avgEngagementTime: '3m 42s',
+          newUsers: 8934,
+          adr: 125.50,
+          revpar: 87.25,
+          conversion: 2.8
+        },
+        propertyData: [
+          { name: 'Allen', totalBookings: 45, privateRooms: 12, occupancy: 85, bedsRemaining: 8 },
+          { name: 'Potts Point', totalBookings: 38, privateRooms: 15, occupancy: 78, bedsRemaining: 12 },
+          { name: 'Surry Hills', totalBookings: 52, privateRooms: 18, occupancy: 92, bedsRemaining: 4 },
+          { name: 'Central Sydney', totalBookings: 41, privateRooms: 14, occupancy: 81, bedsRemaining: 10 }
+        ],
+        bookingSourceData: [
+          { name: 'Total Website', amount: 1745.74, count: 12 },
+          { name: 'Organic', amount: 485.38, count: 3 },
+          { name: 'Extensions', amount: 1260.36, count: 9 }
+        ],
+        countryData: [
+          { country: 'Australia', bookings: 45, revenue: 5625 },
+          { country: 'USA', bookings: 28, revenue: 3920 },
+          { country: 'UK', bookings: 22, revenue: 3080 },
+          { country: 'Germany', bookings: 18, revenue: 2340 },
+          { country: 'Japan', bookings: 15, revenue: 1950 },
+          { country: 'Others', bookings: 48, revenue: 6210 }
+        ],
+        hourlyData: [
+          { hour: '00:00', bookings: 2 }, { hour: '02:00', bookings: 1 },
+          { hour: '04:00', bookings: 0 }, { hour: '06:00', bookings: 3 },
+          { hour: '08:00', bookings: 8 }, { hour: '10:00', bookings: 12 },
+          { hour: '12:00', bookings: 15 }, { hour: '14:00', bookings: 18 },
+          { hour: '16:00', bookings: 14 }, { hour: '18:00', bookings: 11 },
+          { hour: '20:00', bookings: 8 }, { hour: '22:00', bookings: 4 }
+        ],
+        dailyData: [
+          { day: 'Mon', bookings: 18 }, { day: 'Tue', bookings: 24 },
+          { day: 'Wed', bookings: 21 }, { day: 'Thu', bookings: 28 },
+          { day: 'Fri', bookings: 35 }, { day: 'Sat', bookings: 42 },
+          { day: 'Sun', bookings: 32 }
+        ],
+        platformData: [
+          { name: 'Direct Website', value: 45, color: '#2d5a3d' },
+          { name: 'Booking.com', value: 38, color: '#5b8e7d' },
+          { name: 'Agoda', value: 28, color: '#97BC62' },
+          { name: 'Expedia', value: 22, color: '#c4a35a' },
+          { name: 'Others', value: 15, color: '#9b9b9b' }
+        ],
+        operationalData: {
+          checkIns: 34,
+          checkOuts: 28,
+          inHouse: 156,
+          stayOver: 122,
+          noShows: 3,
+          cancellations: 7
+        }
+      });
+
+      const COLORS = ['#2d5a3d', '#5b8e7d', '#97BC62', '#c4a35a', '#8b7e74', '#9b9b9b'];
+
+      // Fetch data when date range changes
+      useEffect(() => {
+        // Only fetch if backend is running
+        if (window.location.protocol !== 'file:') {
+          fetchDashboardData();
+          checkApiConnections();
+        }
+      }, [dateRange]);
+
+      // Close pickers when clicking outside
+      useEffect(() => {
+        const handleClickOutside = (event) => {
+          if (datePickerRef.current && !datePickerRef.current.contains(event.target)) {
+            setDatePickerOpen(false);
+          }
+          if (menuRef.current && !menuRef.current.contains(event.target)) {
+            setMenuOpen(false);
+          }
+        };
+
+        if (datePickerOpen || menuOpen) {
+          document.addEventListener('mousedown', handleClickOutside);
+        }
+
+        return () => {
+          document.removeEventListener('mousedown', handleClickOutside);
+        };
+      }, [datePickerOpen, menuOpen]);
+
+      const fetchDashboardData = async () => {
+        setLoading(true);
+        try {
+          const response = await fetch('http://localhost:3001/api/dashboard-data', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              startDate: dateRange.start.toISOString(),
+              endDate: dateRange.end.toISOString()
+            })
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            setDashboardData(data);
+          }
+        } catch (error) {
+          console.log('Using sample data - backend not connected');
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const checkApiConnections = async () => {
+        try {
+          const response = await fetch('http://localhost:3001/api/connection-status');
+          if (response.ok) {
+            const status = await response.json();
+            setApiStatus(status);
+          }
+        } catch (error) {
+          console.log('Backend not connected');
+        }
+      };
+
+      const exportToCSV = () => {
+        const csvData = [];
+        csvData.push(['Website Booking Analytics Report']);
+        csvData.push([`Date Range: ${formatDateRange()}`]);
+        csvData.push([]);
+        csvData.push(['Website Traffic']);
+        csvData.push(['Sessions', dashboardData.websiteTraffic.sessions]);
+        csvData.push(['Page Views', dashboardData.websiteTraffic.pageViews]);
+        
+        const csvContent = csvData.map(row => row.join(',')).join('\\n');
+        const blob = new Blob([csvContent], { type: 'text/csv' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `dashboard-data-${dateRange.start.toISOString().split('T')[0]}.csv`;
+        a.click();
+        window.URL.revokeObjectURL(url);
+      };
+
+      const formatDateRange = () => {
+        const options = { month: 'short', day: 'numeric', year: 'numeric' };
+        return `${dateRange.label}: ${dateRange.start.toLocaleDateString('en-US', options)} - ${dateRange.end.toLocaleDateString('en-US', options)}`;
+      };
+
+      const handlePresetSelection = (preset) => {
+        const today = new Date();
+        let start, end, label;
+        
+        switch(preset) {
+          case 'today':
+            start = new Date(today);
+            end = new Date(today);
+            label = 'Today';
+            break;
+          case 'yesterday':
+            start = new Date(today.setDate(today.getDate() - 1));
+            end = new Date(start);
+            label = 'Yesterday';
+            break;
+          case 'last7':
+            start = new Date(today);
+            start.setDate(start.getDate() - 7);
+            end = new Date();
+            label = 'Last 7 days';
+            break;
+          case 'last28':
+            start = new Date(today);
+            start.setDate(start.getDate() - 28);
+            end = new Date();
+            label = 'Last 28 days';
+            break;
+          default:
+            start = new Date(today);
+            start.setDate(start.getDate() - 28);
+            end = new Date();
+            label = 'Last 28 days';
+        }
+        
+        setCustomStartDate(start.toISOString().split('T')[0]);
+        setCustomEndDate(end.toISOString().split('T')[0]);
+      };
+
+      const handleCustomDateUpdate = () => {
+        if (customStartDate && customEndDate) {
+          setDateRange({
+            start: new Date(customStartDate),
+            end: new Date(customEndDate),
+            label: 'Custom range'
+          });
+          setDatePickerOpen(false);
+        }
+      };
+
+      return (
+        <div style={{
+          minHeight: '100vh',
+          background: '#fdfcfb',
+          fontFamily: '"DM Sans", -apple-system, BlinkMacSystemFont, sans-serif',
+          color: '#1a1a1a'
+        }}>
+          <p style={{
+            background: '#fff3cd',
+            color: '#856404',
+            padding: '1rem',
+            textAlign: 'center',
+            borderBottom: '1px solid #ffeaa7'
+          }}>
+            ⚠️ <strong>Demo Mode:</strong> Showing sample data. Run backend server and frontend dev server for live data.
+          </p>
+
+          {/* Rest of dashboard JSX here - continuing in next message due to length */}
+          <div style={{ padding: '2rem', textAlign: 'center', marginTop: '4rem' }}>
+            <h1 style={{
+              fontFamily: '"Crimson Pro", serif',
+              fontSize: '2.5rem',
+              fontWeight: '300',
+              marginBottom: '1rem',
+              color: '#2d5a3d'
+            }}>Website Booking Analytics</h1>
+            <p style={{ fontSize: '1.1rem', color: '#6b6b6b', marginBottom: '2rem' }}>
+              Dashboard showing sample data
+            </p>
+            
+            <div style={{
+              background: '#fff',
+              padding: '3rem',
+              borderRadius: '12px',
+              maxWidth: '800px',
+              margin: '0 auto',
+              border: '1px solid #e8e7e5',
+              textAlign: 'left'
+            }}>
+              <h2 style={{ marginBottom: '1.5rem', color: '#2d5a3d' }}>Quick Start Instructions:</h2>
+              
+              <ol style={{ lineHeight: '2', fontSize: '1rem' }}>
+                <li>Open terminal and navigate to the project folder</li>
+                <li>Run: <code style={{ background: '#f7f6f4', padding: '0.25rem 0.5rem', borderRadius: '4px' }}>chmod +x setup.sh && ./setup.sh</code></li>
+                <li>Configure <code style={{ background: '#f7f6f4', padding: '0.25rem 0.5rem', borderRadius: '4px' }}>backend/.env</code> with your API credentials</li>
+                <li>Run: <code style={{ background: '#f7f6f4', padding: '0.25rem 0.5rem', borderRadius: '4px' }}>./start-all.sh</code></li>
+                <li>Dashboard will open at <code style={{ background: '#f7f6f4', padding: '0.25rem 0.5rem', borderRadius: '4px' }}>http://localhost:3000</code></li>
+              </ol>
+
+              <div style={{
+                marginTop: '2rem',
+                padding: '1.5rem',
+                background: '#e8f0ea',
+                borderRadius: '8px',
+                borderLeft: '4px solid #2d5a3d'
+              }}>
+                <h3 style={{ marginTop: 0, color: '#2d5a3d' }}>📋 What You Get:</h3>
+                <ul style={{ marginBottom: 0 }}>
+                  <li>Real-time Google Analytics 4 data</li>
+                  <li>Live Cloudbeds booking data</li>
+                  <li>4 property performance tracking</li>
+                  <li>CSV & PDF export</li>
+                  <li>API connection monitoring</li>
+                </ul>
+              </div>
+
+              <div style={{ marginTop: '2rem', textAlign: 'center' }}>
+                <a 
+                  href="SETUP_GUIDE.md"
+                  style={{
+                    display: 'inline-block',
+                    background: '#2d5a3d',
+                    color: '#fff',
+                    padding: '1rem 2rem',
+                    borderRadius: '6px',
+                    textDecoration: 'none',
+                    fontWeight: '600'
+                  }}
+                >
+                  📖 Read Full Setup Guide
+                </a>
+              </div>
+            </div>
+
+            <p style={{ marginTop: '3rem', color: '#9b9b9b', fontSize: '0.9rem' }}>
+              This standalone HTML file shows instructions only.<br/>
+              Use the development server for the full dashboard.
+            </p>
+          </div>
+        </div>
+      );
+    };
+
+    // Render the app
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<Dashboard />);
+  </script>
+</body>
+</html>
