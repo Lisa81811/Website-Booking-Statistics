@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 const Dashboard = () => {
@@ -20,74 +20,74 @@ const Dashboard = () => {
   const datePickerRef = useRef(null);
   const menuRef = useRef(null);
 
-  // Sample data - will be replaced with API data
   const [dashboardData, setDashboardData] = useState({
     websiteTraffic: {
-      sessions: 12847,
-      pageViews: 45623,
-      avgEngagementTime: '3m 42s',
-      newUsers: 8934,
-      adr: 125.50,
-      revpar: 87.25,
-      conversion: 2.8
+      sessions: 0,
+      pageViews: 0,
+      avgEngagementTime: '0m 0s',
+      newUsers: 0,
+      activeUsers: 0,
+      bounceRate: 0,
+      adr: 0,
+      revpar: 0,
+      conversion: 0
     },
-    propertyData: [
-      { name: 'Allen', totalBookings: 45, privateRooms: 12, occupancy: 85, bedsRemaining: 8 },
-      { name: 'Potts Point', totalBookings: 38, privateRooms: 15, occupancy: 78, bedsRemaining: 12 },
-      { name: 'Surry Hills', totalBookings: 52, privateRooms: 18, occupancy: 92, bedsRemaining: 4 },
-      { name: 'Central Sydney', totalBookings: 41, privateRooms: 14, occupancy: 81, bedsRemaining: 10 }
-    ],
-    bookingSourceData: [
-      { name: 'Total Website', amount: 1745.74, count: 12 },
-      { name: 'Organic', amount: 485.38, count: 3 },
-      { name: 'Extensions', amount: 1260.36, count: 9 }
-    ],
-    countryData: [
-      { country: 'Australia', bookings: 45, revenue: 5625 },
-      { country: 'USA', bookings: 28, revenue: 3920 },
-      { country: 'UK', bookings: 22, revenue: 3080 },
-      { country: 'Germany', bookings: 18, revenue: 2340 },
-      { country: 'Japan', bookings: 15, revenue: 1950 },
-      { country: 'Others', bookings: 48, revenue: 6210 }
-    ],
-    hourlyData: [
-      { hour: '00:00', bookings: 2 }, { hour: '02:00', bookings: 1 },
-      { hour: '04:00', bookings: 0 }, { hour: '06:00', bookings: 3 },
-      { hour: '08:00', bookings: 8 }, { hour: '10:00', bookings: 12 },
-      { hour: '12:00', bookings: 15 }, { hour: '14:00', bookings: 18 },
-      { hour: '16:00', bookings: 14 }, { hour: '18:00', bookings: 11 },
-      { hour: '20:00', bookings: 8 }, { hour: '22:00', bookings: 4 }
-    ],
-    dailyData: [
-      { day: 'Mon', bookings: 18 }, { day: 'Tue', bookings: 24 },
-      { day: 'Wed', bookings: 21 }, { day: 'Thu', bookings: 28 },
-      { day: 'Fri', bookings: 35 }, { day: 'Sat', bookings: 42 },
-      { day: 'Sun', bookings: 32 }
-    ],
-    platformData: [
-      { name: 'Direct Website', value: 45, color: '#2d5a3d' },
-      { name: 'Booking.com', value: 38, color: '#5b8e7d' },
-      { name: 'Agoda', value: 28, color: '#97BC62' },
-      { name: 'Expedia', value: 22, color: '#c4a35a' },
-      { name: 'Others', value: 15, color: '#9b9b9b' }
-    ],
+    propertyData: [],
+    bookingSourceData: [],
+    countryData: [],
+    hourlyData: [],
+    dailyData: [],
+    platformData: [],
     operationalData: {
-      checkIns: 34,
-      checkOuts: 28,
-      inHouse: 156,
-      stayOver: 122,
-      noShows: 3,
-      cancellations: 7
-    }
+      checkIns: 0, checkOuts: 0, inHouse: 0, stayOver: 0, noShows: 0, cancellations: 0
+    },
+    gaTopPages: [],
+    gaDailyTrend: []
   });
 
   const COLORS = ['#2d5a3d', '#5b8e7d', '#97BC62', '#c4a35a', '#8b7e74', '#9b9b9b'];
+
+  // Define fetch functions before useEffect
+  const fetchDashboardData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const response = await fetch('/api/dashboard-data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          startDate: dateRange.start.toISOString(),
+          endDate: dateRange.end.toISOString()
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setDashboardData(data);
+      }
+    } catch (error) {
+      console.error('Error fetching dashboard data:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, [dateRange]);
+
+  const checkApiConnections = useCallback(async () => {
+    try {
+      const response = await fetch('/api/connection-status');
+      if (response.ok) {
+        const status = await response.json();
+        setApiStatus(status);
+      }
+    } catch (error) {
+      console.error('Error checking API connections:', error);
+    }
+  }, []);
 
   // Fetch data when date range changes
   useEffect(() => {
     fetchDashboardData();
     checkApiConnections();
-  }, [dateRange]);
+  }, [fetchDashboardData, checkApiConnections]);
 
   // Close date picker when clicking outside
   useEffect(() => {
@@ -108,41 +108,6 @@ const Dashboard = () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, [datePickerOpen, menuOpen]);
-
-  const fetchDashboardData = async () => {
-    setLoading(true);
-    try {
-      const response = await fetch('/api/dashboard-data', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          startDate: dateRange.start.toISOString(),
-          endDate: dateRange.end.toISOString()
-        })
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        setDashboardData(data);
-      }
-    } catch (error) {
-      console.error('Error fetching dashboard data:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const checkApiConnections = async () => {
-    try {
-      const response = await fetch('/api/connection-status');
-      if (response.ok) {
-        const status = await response.json();
-        setApiStatus(status);
-      }
-    } catch (error) {
-      console.error('Error checking API connections:', error);
-    }
-  };
 
   const exportToCSV = () => {
     const csvData = [];
@@ -316,74 +281,6 @@ const Dashboard = () => {
       setDatePickerOpen(false);
     }
   };
-
-  // Sample data - replace with your actual data source
-  const websiteTrafficData = {
-    sessions: 12847,
-    pageViews: 45623,
-    avgEngagementTime: '3m 42s',
-    newUsers: 8934,
-    adr: 125.50,
-    revpar: 87.25,
-    conversion: 2.8
-  };
-
-  const propertyData = [
-    { name: 'Allen', totalBookings: 45, privateRooms: 12, occupancy: 85, bedsRemaining: 8 },
-    { name: 'Potts Point', totalBookings: 38, privateRooms: 15, occupancy: 78, bedsRemaining: 12 },
-    { name: 'Surry Hills', totalBookings: 52, privateRooms: 18, occupancy: 92, bedsRemaining: 4 },
-    { name: 'Central Sydney', totalBookings: 41, privateRooms: 14, occupancy: 81, bedsRemaining: 10 }
-  ];
-
-  const bookingSourceData = [
-    { name: 'Total Website', amount: 1745.74, count: 12 },
-    { name: 'Organic', amount: 485.38, count: 3 },
-    { name: 'Extensions', amount: 1260.36, count: 9 }
-  ];
-
-  const countryData = [
-    { country: 'Australia', bookings: 45, revenue: 5625 },
-    { country: 'USA', bookings: 28, revenue: 3920 },
-    { country: 'UK', bookings: 22, revenue: 3080 },
-    { country: 'Germany', bookings: 18, revenue: 2340 },
-    { country: 'Japan', bookings: 15, revenue: 1950 },
-    { country: 'Others', bookings: 48, revenue: 6210 }
-  ];
-
-  const hourlyData = [
-    { hour: '00:00', bookings: 2 }, { hour: '02:00', bookings: 1 },
-    { hour: '04:00', bookings: 0 }, { hour: '06:00', bookings: 3 },
-    { hour: '08:00', bookings: 8 }, { hour: '10:00', bookings: 12 },
-    { hour: '12:00', bookings: 15 }, { hour: '14:00', bookings: 18 },
-    { hour: '16:00', bookings: 14 }, { hour: '18:00', bookings: 11 },
-    { hour: '20:00', bookings: 8 }, { hour: '22:00', bookings: 4 }
-  ];
-
-  const dailyData = [
-    { day: 'Mon', bookings: 18 }, { day: 'Tue', bookings: 24 },
-    { day: 'Wed', bookings: 21 }, { day: 'Thu', bookings: 28 },
-    { day: 'Fri', bookings: 35 }, { day: 'Sat', bookings: 42 },
-    { day: 'Sun', bookings: 32 }
-  ];
-
-  const platformData = [
-    { name: 'Direct Website', value: 45, color: '#2d5a3d' },
-    { name: 'Booking.com', value: 38, color: '#5b8e7d' },
-    { name: 'Agoda', value: 28, color: '#97BC62' },
-    { name: 'Expedia', value: 22, color: '#c4a35a' },
-    { name: 'Others', value: 15, color: '#9b9b9b' }
-  ];
-
-  const operationalData = {
-    checkIns: 34,
-    checkOuts: 28,
-    inHouse: 156,
-    stayOver: 122,
-    noShows: 3,
-    cancellations: 7
-  };
-
-  const COLORS = ['#2d5a3d', '#5b8e7d', '#97BC62', '#c4a35a', '#8b7e74', '#9b9b9b'];
 
   return (
     <div style={{
@@ -814,6 +711,7 @@ const Dashboard = () => {
               </div>
             )}
           </div>
+          </div>
         </div>
       </header>
 
@@ -905,6 +803,8 @@ const Dashboard = () => {
                   { label: 'Page Views', value: dashboardData.websiteTraffic.pageViews.toLocaleString() },
                   { label: 'Avg. Engagement', value: dashboardData.websiteTraffic.avgEngagementTime },
                   { label: 'New Users', value: dashboardData.websiteTraffic.newUsers.toLocaleString() },
+                  { label: 'Active Users', value: (dashboardData.websiteTraffic.activeUsers || 0).toLocaleString() },
+                  { label: 'Bounce Rate', value: `${dashboardData.websiteTraffic.bounceRate || 0}%` },
                   { label: 'ADR', value: `$${dashboardData.websiteTraffic.adr}` },
                   { label: 'RevPAR', value: `$${dashboardData.websiteTraffic.revpar}` },
                   { label: 'Conversion', value: `${dashboardData.websiteTraffic.conversion}%` }
@@ -939,6 +839,77 @@ const Dashboard = () => {
                   </div>
                 ))}
               </div>
+
+              {/* Daily Site Traffic Trend */}
+              {dashboardData.gaDailyTrend && dashboardData.gaDailyTrend.length > 0 && (
+                <div style={{
+                  background: '#fff',
+                  border: '1px solid #e8e7e5',
+                  borderRadius: '8px',
+                  padding: '2rem',
+                  marginTop: '1.5rem',
+                  boxShadow: '0 1px 3px rgba(0, 0, 0, 0.04)'
+                }}>
+                  <h3 style={{
+                    fontSize: '1rem',
+                    fontWeight: '500',
+                    color: '#1a1a1a',
+                    marginBottom: '1rem'
+                  }}>Daily Site Traffic</h3>
+                  <ResponsiveContainer width="100%" height={280}>
+                    <LineChart data={dashboardData.gaDailyTrend.map(d => ({
+                      ...d,
+                      date: `${d.date.substring(4, 6)}/${d.date.substring(6, 8)}`
+                    }))}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e8e7e5" />
+                      <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#6b6b6b' }} />
+                      <YAxis tick={{ fontSize: 11, fill: '#6b6b6b' }} />
+                      <Tooltip />
+                      <Legend />
+                      <Line type="monotone" dataKey="sessions" stroke="#2d5a3d" strokeWidth={2} dot={false} name="Sessions" />
+                      <Line type="monotone" dataKey="pageViews" stroke="#97BC62" strokeWidth={2} dot={false} name="Page Views" />
+                      <Line type="monotone" dataKey="newUsers" stroke="#c4a35a" strokeWidth={2} dot={false} name="New Users" />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+
+              {/* Top Pages */}
+              {dashboardData.gaTopPages && dashboardData.gaTopPages.length > 0 && (
+                <div style={{
+                  background: '#fff',
+                  border: '1px solid #e8e7e5',
+                  borderRadius: '8px',
+                  padding: '2rem',
+                  marginTop: '1.5rem',
+                  boxShadow: '0 1px 3px rgba(0, 0, 0, 0.04)'
+                }}>
+                  <h3 style={{
+                    fontSize: '1rem',
+                    fontWeight: '500',
+                    color: '#1a1a1a',
+                    marginBottom: '1rem'
+                  }}>Top Pages</h3>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '2px solid #e8e7e5' }}>
+                        <th style={{ textAlign: 'left', padding: '0.75rem', fontSize: '0.8rem', color: '#6b6b6b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Page Path</th>
+                        <th style={{ textAlign: 'right', padding: '0.75rem', fontSize: '0.8rem', color: '#6b6b6b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Views</th>
+                        <th style={{ textAlign: 'right', padding: '0.75rem', fontSize: '0.8rem', color: '#6b6b6b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Sessions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {dashboardData.gaTopPages.map((page, idx) => (
+                        <tr key={idx} style={{ borderBottom: '1px solid #f0f0f0' }}>
+                          <td style={{ padding: '0.75rem', fontSize: '0.9rem', color: '#2d5a3d', fontWeight: '500' }}>{page.path}</td>
+                          <td style={{ textAlign: 'right', padding: '0.75rem', fontSize: '0.9rem' }}>{page.views.toLocaleString()}</td>
+                          <td style={{ textAlign: 'right', padding: '0.75rem', fontSize: '0.9rem' }}>{page.sessions.toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </section>
 
             {/* Website Booking Section */}
@@ -1001,12 +972,12 @@ const Dashboard = () => {
                 marginBottom: '2rem'
               }}>
                 {[
-                  { label: 'Check-ins', value: operationalData.checkIns, color: '#2d5a3d' },
-                  { label: 'Check-outs', value: operationalData.checkOuts, color: '#5b8e7d' },
-                  { label: 'In-house', value: operationalData.inHouse, color: '#97BC62' },
-                  { label: 'Stay Over', value: operationalData.stayOver, color: '#c4a35a' },
-                  { label: 'No Shows', value: operationalData.noShows, color: '#bc4b51' },
-                  { label: 'Cancellations', value: operationalData.cancellations, color: '#9b9b9b' }
+                  { label: 'Check-ins', value: dashboardData.operationalData.checkIns, color: '#2d5a3d' },
+                  { label: 'Check-outs', value: dashboardData.operationalData.checkOuts, color: '#5b8e7d' },
+                  { label: 'In-house', value: dashboardData.operationalData.inHouse, color: '#97BC62' },
+                  { label: 'Stay Over', value: dashboardData.operationalData.stayOver, color: '#c4a35a' },
+                  { label: 'No Shows', value: dashboardData.operationalData.noShows, color: '#bc4b51' },
+                  { label: 'Cancellations', value: dashboardData.operationalData.cancellations, color: '#9b9b9b' }
                 ].map((metric, idx) => (
                   <div key={idx} style={{
                     background: '#fff',
@@ -1214,7 +1185,7 @@ const Dashboard = () => {
                   <ResponsiveContainer width="100%" height={300}>
                     <PieChart>
                       <Pie
-                        data={countryData}
+                        data={dashboardData.countryData}
                         dataKey="bookings"
                         nameKey="country"
                         cx="50%"
@@ -1260,7 +1231,7 @@ const Dashboard = () => {
                     Bookings by Hour
                   </h3>
                   <ResponsiveContainer width="100%" height={300}>
-                    <LineChart data={hourlyData}>
+                    <LineChart data={dashboardData.hourlyData}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#e8e7e5" />
                       <XAxis dataKey="hour" stroke="#6b6b6b" style={{ fontSize: '0.85rem' }} />
                       <YAxis stroke="#6b6b6b" style={{ fontSize: '0.85rem' }} />
@@ -1299,7 +1270,7 @@ const Dashboard = () => {
                     Bookings by Day
                   </h3>
                   <ResponsiveContainer width="100%" height={300}>
-                    <BarChart data={dailyData}>
+                    <BarChart data={dashboardData.dailyData}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#e8e7e5" />
                       <XAxis dataKey="day" stroke="#6b6b6b" style={{ fontSize: '0.85rem' }} />
                       <YAxis stroke="#6b6b6b" style={{ fontSize: '0.85rem' }} />
@@ -1340,7 +1311,7 @@ const Dashboard = () => {
                   <ResponsiveContainer width="100%" height={300}>
                     <PieChart>
                       <Pie
-                        data={platformData}
+                        data={dashboardData.platformData}
                         dataKey="value"
                         nameKey="name"
                         cx="50%"
@@ -1383,12 +1354,12 @@ const Dashboard = () => {
                 gap: '1.5rem'
               }}>
                 {[
-                  { label: 'Check-ins', value: operationalData.checkIns, color: '#2d5a3d' },
-                  { label: 'Check-outs', value: operationalData.checkOuts, color: '#5b8e7d' },
-                  { label: 'In-house', value: operationalData.inHouse, color: '#97BC62' },
-                  { label: 'Stay Over', value: operationalData.stayOver, color: '#c4a35a' },
-                  { label: 'No Shows', value: operationalData.noShows, color: '#bc4b51' },
-                  { label: 'Cancellations', value: operationalData.cancellations, color: '#9b9b9b' }
+                  { label: 'Check-ins', value: dashboardData.operationalData.checkIns, color: '#2d5a3d' },
+                  { label: 'Check-outs', value: dashboardData.operationalData.checkOuts, color: '#5b8e7d' },
+                  { label: 'In-house', value: dashboardData.operationalData.inHouse, color: '#97BC62' },
+                  { label: 'Stay Over', value: dashboardData.operationalData.stayOver, color: '#c4a35a' },
+                  { label: 'No Shows', value: dashboardData.operationalData.noShows, color: '#bc4b51' },
+                  { label: 'Cancellations', value: dashboardData.operationalData.cancellations, color: '#9b9b9b' }
                 ].map((metric, idx) => (
                   <div key={idx} style={{
                     background: '#fff',
@@ -1436,18 +1407,18 @@ const Dashboard = () => {
         marginTop: '3rem',
         background: '#fff'
       }}>
-        Last updated: {new Date().toLocaleString()} • All data is sample - connect to your analytics source
+        Last updated: {new Date().toLocaleString()} • Live data from Cloudbeds + Google Analytics
       </footer>
 
       <style>{`
         @keyframes fadeIn {
-          from { 
-            opacity: 0; 
+          from {
+            opacity: 0;
             transform: translateY(10px);
           }
-          to { 
-            opacity: 1; 
-            transform: translateY(0); 
+          to {
+            opacity: 1;
+            transform: translateY(0);
           }
         }
       `}</style>

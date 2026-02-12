@@ -1,9 +1,16 @@
-const express = require('express');
-const cors = require('cors');
-const PDFDocument = require('pdfkit');
-const { BetaAnalyticsDataClient } = require('@google-analytics/data');
-const axios = require('axios');
-require('dotenv').config();
+import express from 'express';
+import cors from 'cors';
+import PDFDocument from 'pdfkit';
+import axios from 'axios';
+import dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import { BetaAnalyticsDataClient } from '@google-analytics/data';
+
+dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -12,240 +19,374 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
-// Google Analytics Client
-const analyticsClient = new BetaAnalyticsDataClient({
-  keyFilename: process.env.GOOGLE_ANALYTICS_KEY_PATH
+// Serve static files from current directory
+app.use(express.static(__dirname));
+
+// Google Analytics configuration
+const GA_PROPERTY_ID = '460526176';
+const analyticsDataClient = new BetaAnalyticsDataClient({
+  keyFilename: join(__dirname, 'service_account.json')
 });
 
-// Cloudbeds API configuration
-const CLOUDBEDS_API_URL = 'https://api.cloudbeds.com/api/v1.1';
-let cloudbedsAccessToken = process.env.CLOUDBEDS_ACCESS_TOKEN;
-
-// Helper function to fetch Google Analytics data
+// Fetch Google Analytics data for a date range
 async function fetchGoogleAnalyticsData(startDate, endDate) {
   try {
-    const propertyId = process.env.GA4_PROPERTY_ID;
-    
-    const [response] = await analyticsClient.runReport({
-      property: `properties/${propertyId}`,
-      dateRanges: [
-        {
-          startDate: startDate,
-          endDate: endDate,
-        },
-      ],
-      dimensions: [
-        { name: 'date' },
-        { name: 'country' },
-        { name: 'deviceCategory' },
-      ],
+    console.log(`Fetching GA data from ${startDate} to ${endDate}...`);
+
+    const [response] = await analyticsDataClient.runReport({
+      property: `properties/${GA_PROPERTY_ID}`,
+      dateRanges: [{ startDate, endDate }],
       metrics: [
         { name: 'sessions' },
         { name: 'screenPageViews' },
-        { name: 'averageSessionDuration' },
         { name: 'newUsers' },
-        { name: 'conversions' },
+        { name: 'averageSessionDuration' },
+        { name: 'activeUsers' },
+        { name: 'engagedSessions' },
+        { name: 'bounceRate' },
+        { name: 'conversions' }
+      ]
+    });
+
+    const row = response.rows?.[0];
+    if (!row) {
+      console.log('  No GA data returned');
+      return null;
+    }
+
+    const sessions = parseInt(row.metricValues[0].value) || 0;
+    const pageViews = parseInt(row.metricValues[1].value) || 0;
+    const newUsers = parseInt(row.metricValues[2].value) || 0;
+    const avgSessionDurationSec = parseFloat(row.metricValues[3].value) || 0;
+    const activeUsers = parseInt(row.metricValues[4].value) || 0;
+    const engagedSessions = parseInt(row.metricValues[5].value) || 0;
+    const bounceRate = parseFloat(row.metricValues[6].value) || 0;
+    const conversions = parseInt(row.metricValues[7].value) || 0;
+
+    // Format avg session duration as "Xm Ys"
+    const mins = Math.floor(avgSessionDurationSec / 60);
+    const secs = Math.round(avgSessionDurationSec % 60);
+    const avgEngagementTime = `${mins}m ${secs}s`;
+
+    // Fetch page path breakdown for top pages
+    const [pageResponse] = await analyticsDataClient.runReport({
+      property: `properties/${GA_PROPERTY_ID}`,
+      dateRanges: [{ startDate, endDate }],
+      dimensions: [{ name: 'pagePath' }],
+      metrics: [
+        { name: 'screenPageViews' },
+        { name: 'sessions' }
       ],
+      orderBys: [{ metric: { metricName: 'screenPageViews' }, desc: true }],
+      limit: 10
     });
 
-    // Process the response
-    let totalSessions = 0;
-    let totalPageViews = 0;
-    let totalDuration = 0;
-    let totalNewUsers = 0;
-    let totalConversions = 0;
-    const countryStats = {};
-    const hourlyStats = {};
-    const dailyStats = {};
+    const topPages = (pageResponse.rows || []).map(r => ({
+      path: r.dimensionValues[0].value,
+      views: parseInt(r.metricValues[0].value),
+      sessions: parseInt(r.metricValues[1].value)
+    }));
 
-    response.rows?.forEach((row) => {
-      const metricValues = row.metricValues;
-      const sessions = parseInt(metricValues[0].value);
-      const pageViews = parseInt(metricValues[1].value);
-      const duration = parseFloat(metricValues[2].value);
-      const newUsers = parseInt(metricValues[3].value);
-      const conversions = parseInt(metricValues[4].value);
-
-      totalSessions += sessions;
-      totalPageViews += pageViews;
-      totalDuration += duration * sessions;
-      totalNewUsers += newUsers;
-      totalConversions += conversions;
-
-      // Country aggregation
-      const country = row.dimensionValues[1].value;
-      if (!countryStats[country]) {
-        countryStats[country] = { sessions: 0, pageViews: 0 };
-      }
-      countryStats[country].sessions += sessions;
-      countryStats[country].pageViews += pageViews;
+    // Fetch daily sessions for trend data
+    const [dailyResponse] = await analyticsDataClient.runReport({
+      property: `properties/${GA_PROPERTY_ID}`,
+      dateRanges: [{ startDate, endDate }],
+      dimensions: [{ name: 'date' }],
+      metrics: [
+        { name: 'sessions' },
+        { name: 'screenPageViews' },
+        { name: 'newUsers' }
+      ],
+      orderBys: [{ dimension: { dimensionName: 'date' }, desc: false }]
     });
 
-    const avgEngagementTime = totalSessions > 0 
-      ? Math.floor((totalDuration / totalSessions))
-      : 0;
+    const dailyTrend = (dailyResponse.rows || []).map(r => ({
+      date: r.dimensionValues[0].value,
+      sessions: parseInt(r.metricValues[0].value),
+      pageViews: parseInt(r.metricValues[1].value),
+      newUsers: parseInt(r.metricValues[2].value)
+    }));
 
-    const conversionRate = totalSessions > 0 
-      ? ((totalConversions / totalSessions) * 100).toFixed(2)
-      : 0;
-
-    return {
-      sessions: totalSessions,
-      pageViews: totalPageViews,
-      avgEngagementTime: `${Math.floor(avgEngagementTime / 60)}m ${avgEngagementTime % 60}s`,
-      newUsers: totalNewUsers,
-      conversion: parseFloat(conversionRate),
-      countryData: Object.entries(countryStats).map(([country, stats]) => ({
-        country,
-        sessions: stats.sessions,
-        pageViews: stats.pageViews
-      })).sort((a, b) => b.sessions - a.sessions).slice(0, 10)
+    const gaData = {
+      sessions,
+      pageViews,
+      newUsers,
+      activeUsers,
+      avgEngagementTime,
+      engagedSessions,
+      bounceRate: parseFloat((bounceRate * 100).toFixed(1)),
+      conversions,
+      topPages,
+      dailyTrend
     };
+
+    console.log(`  ✓ GA: ${sessions} sessions, ${pageViews} page views, ${newUsers} new users`);
+    return gaData;
   } catch (error) {
-    console.error('Error fetching Google Analytics data:', error);
-    throw error;
+    console.error('Error fetching Google Analytics data:', error.message);
+    return null;
   }
 }
 
-// Helper function to fetch Cloudbeds data
-async function fetchCloudbedsData(startDate, endDate) {
+// Cloudbeds API configuration
+const CLOUDBEDS_API_URL = 'https://api.cloudbeds.com/api/v1.3';
+
+// Load all properties from environment variables
+const properties = [];
+for (let i = 1; i <= 5; i++) {
+  const id = process.env[`PROPERTY_${i}_ID`];
+  const name = process.env[`PROPERTY_${i}_NAME`];
+  const apiKey = process.env[`PROPERTY_${i}_API_KEY`];
+
+  if (id && name && apiKey) {
+    properties.push({ id, name, apiKey });
+  }
+}
+
+console.log(`Loaded ${properties.length} properties:`, properties.map(p => p.name));
+
+// Rate limiting helper - add delay between requests
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Helper function to fetch all reservations for a property with pagination
+async function fetchAllReservations(property, startDate, endDate, headers) {
+  let allReservations = [];
+  let pageNumber = 1;
+  let hasMorePages = true;
+
+  while (hasMorePages) {
+    const response = await axios.get(`${CLOUDBEDS_API_URL}/getReservationsWithRateDetails`, {
+      headers,
+      params: {
+        propertyID: property.id,
+        resultsFrom: `${startDate} 00:00:00`,
+        resultsTo: `${endDate} 23:59:59`,
+        excludeStatuses: 'canceled',
+        pageNumber,
+        pageSize: 100
+      }
+    });
+
+    const reservations = response.data.data || [];
+    allReservations = allReservations.concat(reservations);
+
+    // Check if there are more pages
+    const totalCount = response.data.count || 0;
+    hasMorePages = allReservations.length < totalCount;
+    pageNumber++;
+
+    if (hasMorePages) {
+      console.log(`  Fetching page ${pageNumber} for ${property.name}...`);
+      await delay(150); // Rate limiting between pages (10 req/sec = ~100ms, use 150ms to be safe)
+    }
+  }
+
+  return allReservations;
+}
+
+// Helper function to fetch data from a single property for date range
+async function fetchPropertyData(property, startDate, endDate) {
   try {
     const headers = {
-      'Authorization': `Bearer ${cloudbedsAccessToken}`,
+      'Authorization': `Bearer ${property.apiKey}`,
+      'X-PROPERTY-ID': property.id,
       'Content-Type': 'application/json'
     };
 
-    // Fetch reservations
-    const reservationsResponse = await axios.get(`${CLOUDBEDS_API_URL}/getReservations`, {
+    console.log(`Fetching data for ${property.name} from ${startDate} to ${endDate}...`);
+
+    // Fetch all reservations (with pagination)
+    const reservations = await fetchAllReservations(property, startDate, endDate, headers);
+
+    // Fetch no-shows for the date range
+    const noShowResponse = await axios.get(`${CLOUDBEDS_API_URL}/getReservations`, {
       headers,
       params: {
-        startDate: startDate,
-        endDate: endDate,
-        includeExtras: true
+        propertyID: property.id,
+        status: 'no_show',
+        checkInFrom: startDate,
+        checkInTo: endDate,
+        pageSize: 100
       }
     });
 
-    // Fetch properties
-    const propertiesResponse = await axios.get(`${CLOUDBEDS_API_URL}/getHotels`, {
-      headers
-    });
+    console.log(`  ✓ Fetched ${reservations.length} reservations and ${noShowResponse.data.count || 0} no-shows`);
 
-    const reservations = reservationsResponse.data.data || [];
-    const properties = propertiesResponse.data.data || [];
+    return {
+      propertyId: property.id,
+      propertyName: property.name,
+      reservations,
+      noShowCount: noShowResponse.data.count || 0
+    };
+  } catch (error) {
+    console.error(`Error fetching data for ${property.name}:`, error.response?.data || error.message);
+    return {
+      propertyId: property.id,
+      propertyName: property.name,
+      reservations: [],
+      noShowCount: 0,
+      error: error.message
+    };
+  }
+}
 
-    // Process reservations by property
+// Helper function to fetch and aggregate Cloudbeds data from all properties
+async function fetchCloudbedsData(startDate, endDate) {
+  try {
+    console.log(`Fetching data from ${startDate} to ${endDate} for ${properties.length} properties...`);
+
+    // Fetch data for ALL properties in parallel (Cloudbeds supports ~10 req/sec)
+    const allPropertyData = await Promise.all(
+      properties.map(property => fetchPropertyData(property, startDate, endDate))
+    );
+
+    // Initialize aggregation structures
     const propertyStats = {};
+    const countryStats = {};
     const platformStats = {};
     const hourlyBookings = Array(24).fill(0);
     const dailyBookings = { Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0, Sun: 0 };
-    
-    let totalRevenue = 0;
+
     let totalBookings = 0;
-    let totalNights = 0;
-    let websiteBookings = 0;
+    let totalRevenue = 0;
     let websiteRevenue = 0;
-    let organicBookings = 0;
-    let organicRevenue = 0;
-    let extensionBookings = 0;
-    let extensionRevenue = 0;
+    let websiteBookings = 0;
+    let privateRooms = 0;
+    let noShows = 0;
+    let checkIns = 0;
+    let checkOuts = 0;
 
-    reservations.forEach(reservation => {
-      const propertyId = reservation.propertyID;
-      const source = reservation.source || 'Direct';
-      const revenue = parseFloat(reservation.balance) || 0;
-      const nights = reservation.nights || 1;
-      
-      totalRevenue += revenue;
-      totalBookings++;
-      totalNights += nights;
+    // Process all fetched data
+    allPropertyData.forEach(propData => {
+      const { reservations, noShowCount, propertyId, propertyName } = propData;
 
-      // Property stats
+      // Initialize property stats
       if (!propertyStats[propertyId]) {
         propertyStats[propertyId] = {
+          name: propertyName,
           totalBookings: 0,
           privateRooms: 0,
           revenue: 0,
-          occupancy: 0
+          checkIns: 0,
+          checkOuts: 0
         };
       }
-      propertyStats[propertyId].totalBookings++;
-      propertyStats[propertyId].revenue += revenue;
-      if (reservation.roomType === 'private') {
-        propertyStats[propertyId].privateRooms++;
-      }
 
-      // Platform stats
-      if (!platformStats[source]) {
-        platformStats[source] = 0;
-      }
-      platformStats[source]++;
+      noShows += noShowCount;
 
-      // Source categorization
-      if (source === 'Direct' || source === 'Website') {
-        websiteBookings++;
-        websiteRevenue += revenue;
-        
-        if (reservation.isOrganic) {
-          organicBookings++;
-          organicRevenue += revenue;
-        } else if (reservation.isExtension) {
-          extensionBookings++;
-          extensionRevenue += revenue;
+      // Process reservations
+      reservations.forEach(reservation => {
+        const source = reservation.sourceName || 'Unknown';
+        const revenue = parseFloat(reservation.total || 0);
+        const guestCountry = reservation.guestCountry || 'Unknown';
+        const status = reservation.status || '';
+
+        // Count total bookings (exclude no-shows which are counted separately)
+        if (status.toLowerCase() !== 'no_show') {
+          totalBookings++;
+          propertyStats[propertyId].totalBookings++;
         }
-      }
 
-      // Hourly and daily distribution
-      if (reservation.createdAt) {
-        const date = new Date(reservation.createdAt);
-        const hour = date.getHours();
-        const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][date.getDay()];
-        
-        hourlyBookings[hour]++;
-        dailyBookings[day]++;
-      }
+        totalRevenue += revenue;
+        propertyStats[propertyId].revenue += revenue;
+
+        // Track check-ins and check-outs within date range
+        const checkIn = reservation.startDate ? new Date(reservation.startDate) : null;
+        const checkOut = reservation.endDate ? new Date(reservation.endDate) : null;
+        const rangeStart = new Date(startDate);
+        const rangeEnd = new Date(endDate);
+
+        if (checkIn && checkIn >= rangeStart && checkIn <= rangeEnd) {
+          checkIns++;
+          propertyStats[propertyId].checkIns++;
+        }
+        if (checkOut && checkOut >= rangeStart && checkOut <= rangeEnd) {
+          checkOuts++;
+          propertyStats[propertyId].checkOuts++;
+        }
+
+        // Country stats
+        if (!countryStats[guestCountry]) {
+          countryStats[guestCountry] = { bookings: 0, revenue: 0 };
+        }
+        countryStats[guestCountry].bookings++;
+        countryStats[guestCountry].revenue += revenue;
+
+        // Platform/Source stats
+        if (!platformStats[source]) {
+          platformStats[source] = { bookings: 0, revenue: 0 };
+        }
+        platformStats[source].bookings++;
+        platformStats[source].revenue += revenue;
+
+        // Website bookings
+        if (source.toLowerCase().includes('website') || source.toLowerCase().includes('booking engine')) {
+          websiteBookings++;
+          websiteRevenue += revenue;
+        }
+
+        // Private rooms count
+        const rooms = reservation.rooms || [];
+        rooms.forEach(room => {
+          const roomType = (room.roomTypeName || '').toLowerCase();
+          if (roomType.includes('private') || roomType.includes('single') ||
+              roomType.includes('double') || roomType.includes('queen') || roomType.includes('king')) {
+            privateRooms++;
+            propertyStats[propertyId].privateRooms++;
+          }
+        });
+
+        // Hourly and daily distribution (based on booking creation time)
+        const dateCreated = reservation.dateCreatedUTC || reservation.dateCreated;
+        if (dateCreated) {
+          const date = new Date(dateCreated);
+          const hour = date.getHours();
+          const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][date.getDay()];
+
+          hourlyBookings[hour]++;
+          dailyBookings[day]++;
+        }
+      });
     });
 
-    // Calculate ADR and RevPAR
+    // Calculate metrics
     const adr = totalBookings > 0 ? totalRevenue / totalBookings : 0;
-    const revpar = totalNights > 0 ? totalRevenue / totalNights : 0;
+    const estimatedOccupancy = 75; // Placeholder - would need room inventory data to calculate accurately
+    const revpar = adr * (estimatedOccupancy / 100);
 
-    // Get operational metrics
-    const today = new Date();
-    const checkIns = reservations.filter(r => 
-      new Date(r.startDate).toDateString() === today.toDateString()
-    ).length;
-    
-    const checkOuts = reservations.filter(r => 
-      new Date(r.endDate).toDateString() === today.toDateString()
-    ).length;
-    
-    const inHouse = reservations.filter(r => {
-      const start = new Date(r.startDate);
-      const end = new Date(r.endDate);
-      return start <= today && end >= today;
-    }).length;
-
-    const noShows = reservations.filter(r => r.status === 'no_show').length;
-    const cancellations = reservations.filter(r => r.status === 'canceled').length;
+    console.log(`✓ Aggregated ${totalBookings} bookings, $${totalRevenue.toFixed(2)} revenue from all properties`);
 
     return {
-      propertyData: properties.map(prop => ({
-        name: prop.propertyName,
-        totalBookings: propertyStats[prop.propertyID]?.totalBookings || 0,
-        privateRooms: propertyStats[prop.propertyID]?.privateRooms || 0,
-        occupancy: Math.round((propertyStats[prop.propertyID]?.totalBookings / (prop.roomCount || 1)) * 100),
-        bedsRemaining: (prop.roomCount || 0) - (propertyStats[prop.propertyID]?.totalBookings || 0)
+      propertyData: Object.entries(propertyStats).map(([propId, stats]) => ({
+        name: stats.name,
+        totalBookings: stats.totalBookings,
+        privateRooms: stats.privateRooms,
+        occupancy: Math.round((stats.totalBookings / totalBookings) * 100) || 0, // Relative occupancy
+        bedsRemaining: 0 // Would need room inventory data
       })),
       bookingSourceData: [
-        { name: 'Total Website', amount: websiteRevenue, count: websiteBookings },
-        { name: 'Organic', amount: organicRevenue, count: organicBookings },
-        { name: 'Extensions', amount: extensionRevenue, count: extensionBookings }
+        { name: 'Website/Booking Engine', amount: websiteRevenue, count: websiteBookings },
+        { name: 'Other Channels', amount: totalRevenue - websiteRevenue, count: totalBookings - websiteBookings }
       ],
-      platformData: Object.entries(platformStats).map(([name, value]) => ({
-        name,
-        value,
-        color: '#2d5a3d' // You can assign different colors per platform
-      })),
+      platformData: Object.entries(platformStats)
+        .map(([name, data]) => ({
+          name,
+          value: data.bookings,
+          revenue: data.revenue,
+          color: '#2d5a3d'
+        }))
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 10),
+      countryData: Object.entries(countryStats)
+        .map(([country, stats]) => ({
+          country,
+          bookings: stats.bookings,
+          revenue: Math.round(stats.revenue)
+        }))
+        .sort((a, b) => b.bookings - a.bookings)
+        .slice(0, 10),
       hourlyData: hourlyBookings.map((bookings, hour) => ({
         hour: `${hour.toString().padStart(2, '0')}:00`,
         bookings
@@ -257,13 +398,16 @@ async function fetchCloudbedsData(startDate, endDate) {
       operationalData: {
         checkIns,
         checkOuts,
-        inHouse,
-        stayOver: inHouse - checkIns,
+        inHouse: 0, // Would need current snapshot data
+        stayOver: 0, // Would need current snapshot data
         noShows,
-        cancellations
+        cancellations: 0 // Excluded from query
       },
       adr: parseFloat(adr.toFixed(2)),
-      revpar: parseFloat(revpar.toFixed(2))
+      revpar: parseFloat(revpar.toFixed(2)),
+      totalRevenue: parseFloat(totalRevenue.toFixed(2)),
+      totalBookings,
+      websiteBookings
     };
   } catch (error) {
     console.error('Error fetching Cloudbeds data:', error);
@@ -277,44 +421,55 @@ async function fetchCloudbedsData(startDate, endDate) {
 app.post('/api/dashboard-data', async (req, res) => {
   try {
     const { startDate, endDate } = req.body;
-    
-    const gaStartDate = new Date(startDate).toISOString().split('T')[0];
-    const gaEndDate = new Date(endDate).toISOString().split('T')[0];
 
-    // Fetch data from both sources
-    const [gaData, cloudbedsData] = await Promise.all([
-      fetchGoogleAnalyticsData(gaStartDate, gaEndDate),
-      fetchCloudbedsData(gaStartDate, gaEndDate)
+    const apiStartDate = new Date(startDate).toISOString().split('T')[0];
+    const apiEndDate = new Date(endDate).toISOString().split('T')[0];
+
+    console.log(`Fetching dashboard data from ${apiStartDate} to ${apiEndDate}`);
+
+    // Fetch Cloudbeds and GA data in parallel
+    const [cloudbedsData, gaData] = await Promise.all([
+      fetchCloudbedsData(apiStartDate, apiEndDate),
+      fetchGoogleAnalyticsData(apiStartDate, apiEndDate)
     ]);
 
-    // Merge the data
+    // Calculate conversion rate from real GA + Cloudbeds data
+    const conversion = gaData && gaData.sessions > 0
+      ? ((cloudbedsData.totalBookings / gaData.sessions) * 100).toFixed(2)
+      : 0;
+
+    // Format the data for the dashboard
     const dashboardData = {
       websiteTraffic: {
-        sessions: gaData.sessions,
-        pageViews: gaData.pageViews,
-        avgEngagementTime: gaData.avgEngagementTime,
-        newUsers: gaData.newUsers,
+        sessions: gaData?.sessions ?? 0,
+        pageViews: gaData?.pageViews ?? 0,
+        avgEngagementTime: gaData?.avgEngagementTime ?? '0m 0s',
+        newUsers: gaData?.newUsers ?? 0,
+        activeUsers: gaData?.activeUsers ?? 0,
+        bounceRate: gaData?.bounceRate ?? 0,
         adr: cloudbedsData.adr,
         revpar: cloudbedsData.revpar,
-        conversion: gaData.conversion
+        conversion: parseFloat(conversion)
       },
       propertyData: cloudbedsData.propertyData,
       bookingSourceData: cloudbedsData.bookingSourceData,
-      countryData: gaData.countryData.map(c => ({
-        country: c.country,
-        bookings: Math.round(c.sessions / 10), // Estimate bookings from sessions
-        revenue: Math.round(c.sessions * cloudbedsData.adr / 10)
-      })),
+      countryData: cloudbedsData.countryData,
       hourlyData: cloudbedsData.hourlyData,
       dailyData: cloudbedsData.dailyData,
       platformData: cloudbedsData.platformData,
-      operationalData: cloudbedsData.operationalData
+      operationalData: cloudbedsData.operationalData,
+      gaTopPages: gaData?.topPages ?? [],
+      gaDailyTrend: gaData?.dailyTrend ?? []
     };
 
+    console.log(`Successfully fetched data: ${cloudbedsData.totalBookings} bookings, $${cloudbedsData.totalRevenue} revenue, ${gaData?.sessions ?? 0} GA sessions`);
     res.json(dashboardData);
   } catch (error) {
     console.error('Error in /api/dashboard-data:', error);
-    res.status(500).json({ error: 'Failed to fetch dashboard data' });
+    res.status(500).json({
+      error: 'Failed to fetch dashboard data',
+      details: error.message
+    });
   }
 });
 
@@ -322,32 +477,62 @@ app.post('/api/dashboard-data', async (req, res) => {
 app.get('/api/connection-status', async (req, res) => {
   const status = {
     googleAnalytics: { connected: false, lastSync: null },
-    cloudbeds: { connected: false, lastSync: null }
+    cloudbeds: { connected: false, lastSync: null, properties: [] }
   };
 
-  // Test Google Analytics connection
+  // Test GA connection
   try {
-    await analyticsClient.runReport({
-      property: `properties/${process.env.GA4_PROPERTY_ID}`,
-      dateRanges: [{ startDate: '7daysAgo', endDate: 'today' }],
-      metrics: [{ name: 'sessions' }],
+    const [response] = await analyticsDataClient.runReport({
+      property: `properties/${GA_PROPERTY_ID}`,
+      dateRanges: [{ startDate: 'yesterday', endDate: 'today' }],
+      metrics: [{ name: 'sessions' }]
     });
     status.googleAnalytics.connected = true;
     status.googleAnalytics.lastSync = new Date().toISOString();
   } catch (error) {
-    console.error('Google Analytics connection failed:', error);
+    console.error('GA connection test failed:', error.message);
   }
 
-  // Test Cloudbeds connection
-  try {
-    await axios.get(`${CLOUDBEDS_API_URL}/getHotels`, {
-      headers: { 'Authorization': `Bearer ${cloudbedsAccessToken}` }
-    });
-    status.cloudbeds.connected = true;
-    status.cloudbeds.lastSync = new Date().toISOString();
-  } catch (error) {
-    console.error('Cloudbeds connection failed:', error);
+  // Test Cloudbeds connection for each property
+  let connectedCount = 0;
+  const propertyStatuses = [];
+
+  for (const property of properties) {
+    try {
+      const headers = {
+        'Authorization': `Bearer ${property.apiKey}`,
+        'Content-Type': 'application/json'
+      };
+
+      await axios.get(`${CLOUDBEDS_API_URL}/getReservations`, {
+        headers,
+        params: {
+          propertyID: property.id,
+          pageSize: 1
+        }
+      });
+
+      propertyStatuses.push({
+        name: property.name,
+        id: property.id,
+        connected: true
+      });
+      connectedCount++;
+    } catch (error) {
+      console.error(`Connection failed for ${property.name}:`, error.response?.data || error.message);
+      propertyStatuses.push({
+        name: property.name,
+        id: property.id,
+        connected: false,
+        error: error.response?.data?.message || error.message
+      });
+    }
   }
+
+  status.cloudbeds.connected = connectedCount > 0;
+  status.cloudbeds.lastSync = connectedCount > 0 ? new Date().toISOString() : null;
+  status.cloudbeds.properties = propertyStatuses;
+  status.cloudbeds.connectedProperties = `${connectedCount}/${properties.length}`;
 
   res.json(status);
 });
