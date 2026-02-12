@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
+const SUPABASE_URL = 'https://mayqryqrwyfzbjxwxpte.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1heXFyeXFyd3lmemJqeHd4cHRlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA4NzU0NjMsImV4cCI6MjA4NjQ1MTQ2M30.IEK-z3htbl2tz42JjBIe62Kl4aHQMK14nRvKzzve9G4';
+
 const Dashboard = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [datePickerOpen, setDatePickerOpen] = useState(false);
@@ -51,9 +54,13 @@ const Dashboard = () => {
   const fetchDashboardData = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await fetch('/api/dashboard-data', {
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/dashboard-data`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          'apikey': SUPABASE_ANON_KEY
+        },
         body: JSON.stringify({
           startDate: dateRange.start.toISOString(),
           endDate: dateRange.end.toISOString()
@@ -73,7 +80,12 @@ const Dashboard = () => {
 
   const checkApiConnections = useCallback(async () => {
     try {
-      const response = await fetch('/api/connection-status');
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/connection-status`, {
+        headers: {
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          'apikey': SUPABASE_ANON_KEY
+        }
+      });
       if (response.ok) {
         const status = await response.json();
         setApiStatus(status);
