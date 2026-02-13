@@ -6,7 +6,17 @@ interface Property {
   id: string;
   name: string;
   apiKey: string;
+  capacity: number;
 }
+
+// Hard-coded room capacity per property
+const PROPERTY_CAPACITY: Record<string, number> = {
+  "311271": 176, // Azzurro Pod Hotel Darling Harbour
+  "311267": 48,  // Azzurro Pod Hotel Central Sydney
+  "311134": 69,  // Azzurro Boutique Hotel Surry Hills
+  "311272": 107, // Azzurro Pod Hotel Potts Point
+  "311268": 14,  // The Pyrmont Budget Hotel
+};
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -19,7 +29,7 @@ export function loadProperties(): Property[] {
     const name = Deno.env.get(`PROPERTY_${i}_NAME`);
     const apiKey = Deno.env.get(`PROPERTY_${i}_API_KEY`);
     if (id && name && apiKey) {
-      properties.push({ id, name, apiKey });
+      properties.push({ id, name, apiKey, capacity: PROPERTY_CAPACITY[id] || 0 });
     }
   }
   return properties;
@@ -66,16 +76,99 @@ async function fetchAllReservations(
     const reservations = data.data || [];
     allReservations = allReservations.concat(reservations);
 
-    const totalCount = data.count || 0;
+    const totalCount = data.total || 0;
     hasMorePages = allReservations.length < totalCount;
     pageNumber++;
-
-    if (hasMorePages) {
-      await delay(150);
-    }
   }
 
   return allReservations;
+}
+
+// Fetch all unassigned rooms with pagination (matches Python fetch_all_unassigned_rooms)
+async function fetchUnassignedRooms(property: Property): Promise<{
+  rooms: { roomName: string; roomTypeName: string; roomID: string; roomBlocked: boolean }[];
+  totalUnassigned: number;
+}> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${property.apiKey}`,
+    "Content-Type": "application/json",
+  };
+
+  // deno-lint-ignore no-explicit-any
+  let allRooms: any[] = [];
+  let totalUnassigned = 0;
+  let page = 1;
+
+  while (true) {
+    const params = new URLSearchParams({
+      propertyID: property.id,
+      pageNumber: String(page),
+    });
+
+    const resp = await fetch(
+      `${CLOUDBEDS_API_URL}/getRoomsUnassigned?${params}`,
+      { headers }
+    );
+
+    if (!resp.ok) break;
+    const json = await resp.json();
+    const dataList = json.data || [];
+    if (!dataList.length || json.count === 0) break;
+
+    if (page === 1) totalUnassigned = json.total || 0;
+
+    const rooms = dataList[0]?.rooms || [];
+    allRooms = allRooms.concat(rooms);
+    page++;
+
+    if (allRooms.length >= totalUnassigned) break;
+    await delay(150);
+  }
+
+  return { rooms: allRooms, totalUnassigned };
+}
+
+// Fetch today's operational snapshot from getDashboard
+async function fetchDashboardToday(property: Property): Promise<{
+  checkIns: number;
+  checkOuts: number;
+  inHouse: number;
+  stayOvers: number;
+  cancellations: number;
+}> {
+  try {
+    const today = new Date().toISOString().split("T")[0];
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${property.apiKey}`,
+      "X-PROPERTY-ID": property.id,
+      "Content-Type": "application/json",
+    };
+
+    const params = new URLSearchParams({
+      propertyID: property.id,
+      date: today,
+    });
+
+    const response = await fetch(
+      `${CLOUDBEDS_API_URL}/getDashboard?${params}`,
+      { headers }
+    );
+
+    if (!response.ok) return { checkIns: 0, checkOuts: 0, inHouse: 0, stayOvers: 0, cancellations: 0 };
+
+    const data = await response.json();
+    const d = data.data || {};
+
+    return {
+      checkIns: parseInt(d.arrivalsConfirmed || 0),
+      checkOuts: parseInt(d.departuresConfirmed || 0),
+      inHouse: parseInt(d.inHouse || 0),
+      stayOvers: parseInt(d.stayovers || 0),
+      cancellations: parseInt(d.cancellations || 0),
+    };
+  } catch {
+    return { checkIns: 0, checkOuts: 0, inHouse: 0, stayOvers: 0, cancellations: 0 };
+  }
 }
 
 async function fetchPropertyData(
@@ -90,26 +183,22 @@ async function fetchPropertyData(
       "Content-Type": "application/json",
     };
 
-    // Fetch reservations with pagination
-    const reservations = await fetchAllReservations(
-      property,
-      startDate,
-      endDate
-    );
-
-    // Fetch no-shows
-    const noShowParams = new URLSearchParams({
-      propertyID: property.id,
-      status: "no_show",
-      checkInFrom: startDate,
-      checkInTo: endDate,
-      pageSize: "100",
-    });
-
-    const noShowResponse = await fetch(
-      `${CLOUDBEDS_API_URL}/getReservations?${noShowParams}`,
-      { headers }
-    );
+    // Fetch reservations, no-shows, dashboard, and unassigned rooms in parallel
+    const [reservations, noShowResponse, dashboard, unassigned] = await Promise.all([
+      fetchAllReservations(property, startDate, endDate),
+      fetch(
+        `${CLOUDBEDS_API_URL}/getReservations?${new URLSearchParams({
+          propertyID: property.id,
+          status: "no_show",
+          checkInFrom: startDate,
+          checkInTo: endDate,
+          pageSize: "100",
+        })}`,
+        { headers }
+      ),
+      fetchDashboardToday(property),
+      fetchUnassignedRooms(property),
+    ]);
 
     let noShowCount = 0;
     if (noShowResponse.ok) {
@@ -117,11 +206,60 @@ async function fetchPropertyData(
       noShowCount = noShowData.count || 0;
     }
 
+    // Calculate beds left (matching Python logic)
+    const seenBlockedIds = new Set<string>();
+    let blockedCount = 0;
+    let testRooms = 0;
+    let privateRoomsUnassigned = 0;
+    // deno-lint-ignore no-explicit-any
+    const availableRooms: { roomName: string; roomTypeName: string }[] = [];
+
+    // deno-lint-ignore no-explicit-any
+    for (const r of unassigned.rooms as any[]) {
+      const rName = (r.roomName || "").toUpperCase();
+      const rtName = (r.roomTypeName || "Other");
+      const rtUpper = rtName.toUpperCase();
+      const rId = String(r.roomID || "");
+      const isBlocked = r.roomBlocked === true;
+
+      // Exclude test rooms (not blocked)
+      if ((rName.includes("TEST") || rtUpper.includes("TEST")) && !isBlocked) {
+        testRooms++;
+        continue;
+      }
+
+      // Exclude private rooms (not blocked)
+      if (rtUpper.includes("PRIVATE") && !isBlocked) {
+        privateRoomsUnassigned++;
+        continue;
+      }
+
+      // Count unique blocked rooms
+      if (isBlocked && !seenBlockedIds.has(rId)) {
+        blockedCount++;
+        seenBlockedIds.add(rId);
+        continue;
+      }
+
+      if (!isBlocked) {
+        availableRooms.push({ roomName: r.roomName, roomTypeName: rtName });
+      }
+    }
+
+    const bedsLeft = unassigned.totalUnassigned - blockedCount - testRooms - privateRoomsUnassigned;
+    const capacity = property.capacity;
+    const occupancy = capacity > 0 ? ((capacity - bedsLeft) / capacity) * 100 : 0;
+
     return {
       propertyId: property.id,
       propertyName: property.name,
+      capacity,
       reservations,
       noShowCount,
+      dashboard,
+      bedsLeft: Math.max(0, bedsLeft),
+      occupancy: parseFloat(occupancy.toFixed(2)),
+      availableRooms,
     };
   } catch (error) {
     console.error(
@@ -131,8 +269,13 @@ async function fetchPropertyData(
     return {
       propertyId: property.id,
       propertyName: property.name,
+      capacity: property.capacity,
       reservations: [] as unknown[],
       noShowCount: 0,
+      dashboard: { checkIns: 0, checkOuts: 0, inHouse: 0, stayOvers: 0, cancellations: 0 },
+      bedsLeft: 0,
+      occupancy: 0,
+      availableRooms: [] as { roomName: string; roomTypeName: string }[],
     };
   }
 }
@@ -142,12 +285,15 @@ export async function fetchCloudbedsData(
   startDate: string,
   endDate: string
 ) {
-  // Fetch all properties in parallel
-  const allPropertyData = await Promise.all(
-    properties.map((property) =>
-      fetchPropertyData(property, startDate, endDate)
-    )
-  );
+  // Fetch properties in batches of 2 to balance speed vs Cloudbeds rate limits (~10 req/sec)
+  const allPropertyData = [];
+  for (let i = 0; i < properties.length; i += 2) {
+    const batch = properties.slice(i, i + 2);
+    const results = await Promise.all(
+      batch.map((property) => fetchPropertyData(property, startDate, endDate))
+    );
+    allPropertyData.push(...results);
+  }
 
   // Aggregation
   const propertyStats: Record<
@@ -157,8 +303,10 @@ export async function fetchCloudbedsData(
       totalBookings: number;
       privateRooms: number;
       revenue: number;
-      checkIns: number;
-      checkOuts: number;
+      capacity: number;
+      bedsLeft: number;
+      occupancy: number;
+      availableRooms: { roomName: string; roomTypeName: string }[];
     }
   > = {};
   const countryStats: Record<string, { bookings: number; revenue: number }> =
@@ -184,12 +332,26 @@ export async function fetchCloudbedsData(
   let noShows = 0;
   let checkIns = 0;
   let checkOuts = 0;
+  let inHouse = 0;
+  let stayOvers = 0;
+  let cancellations = 0;
 
-  const rangeStart = new Date(startDate);
-  const rangeEnd = new Date(endDate);
+  let totalBedsLeft = 0;
+  let totalCapacity = 0;
 
   allPropertyData.forEach((propData) => {
-    const { reservations, noShowCount, propertyId, propertyName } = propData;
+    const { reservations, noShowCount, propertyId, propertyName, dashboard,
+            bedsLeft, occupancy: propOccupancy, capacity: propCapacity, availableRooms } = propData;
+
+    // Aggregate today's operational snapshot
+    checkIns += dashboard.checkIns;
+    checkOuts += dashboard.checkOuts;
+    inHouse += dashboard.inHouse;
+    stayOvers += dashboard.stayOvers;
+    cancellations += dashboard.cancellations;
+
+    totalBedsLeft += bedsLeft;
+    totalCapacity += propCapacity;
 
     if (!propertyStats[propertyId]) {
       propertyStats[propertyId] = {
@@ -197,8 +359,10 @@ export async function fetchCloudbedsData(
         totalBookings: 0,
         privateRooms: 0,
         revenue: 0,
-        checkIns: 0,
-        checkOuts: 0,
+        capacity: propCapacity,
+        bedsLeft,
+        occupancy: propOccupancy,
+        availableRooms,
       };
     }
 
@@ -218,23 +382,6 @@ export async function fetchCloudbedsData(
 
       totalRevenue += revenue;
       propertyStats[propertyId].revenue += revenue;
-
-      // Check-ins and check-outs
-      const checkIn = reservation.startDate
-        ? new Date(reservation.startDate)
-        : null;
-      const checkOut = reservation.endDate
-        ? new Date(reservation.endDate)
-        : null;
-
-      if (checkIn && checkIn >= rangeStart && checkIn <= rangeEnd) {
-        checkIns++;
-        propertyStats[propertyId].checkIns++;
-      }
-      if (checkOut && checkOut >= rangeStart && checkOut <= rangeEnd) {
-        checkOuts++;
-        propertyStats[propertyId].checkOuts++;
-      }
 
       // Country stats
       if (!countryStats[guestCountry]) {
@@ -291,18 +438,24 @@ export async function fetchCloudbedsData(
   });
 
   const adr = totalBookings > 0 ? totalRevenue / totalBookings : 0;
-  const estimatedOccupancy = 75;
-  const revpar = adr * (estimatedOccupancy / 100);
+  const overallOccupancy = totalCapacity > 0
+    ? ((totalCapacity - totalBedsLeft) / totalCapacity) * 100
+    : 0;
+  const revpar = adr * (overallOccupancy / 100);
 
   return {
     propertyData: Object.entries(propertyStats).map(([, stats]) => ({
       name: stats.name,
       totalBookings: stats.totalBookings,
       privateRooms: stats.privateRooms,
-      occupancy:
-        Math.round((stats.totalBookings / totalBookings) * 100) || 0,
-      bedsRemaining: 0,
+      capacity: stats.capacity,
+      occupancy: Math.round(stats.occupancy),
+      bedsRemaining: stats.bedsLeft,
+      availableRooms: stats.availableRooms,
     })),
+    overallOccupancy: parseFloat(overallOccupancy.toFixed(2)),
+    totalBedsLeft,
+    totalCapacity,
     bookingSourceData: [
       {
         name: "Website/Booking Engine",
@@ -320,6 +473,7 @@ export async function fetchCloudbedsData(
         name,
         value: data.bookings,
         revenue: data.revenue,
+        adr: data.bookings > 0 ? parseFloat((data.revenue / data.bookings).toFixed(2)) : 0,
         color: "#2d5a3d",
       }))
       .sort((a, b) => b.value - a.value)
@@ -329,6 +483,7 @@ export async function fetchCloudbedsData(
         country,
         bookings: stats.bookings,
         revenue: Math.round(stats.revenue),
+        adr: stats.bookings > 0 ? parseFloat((stats.revenue / stats.bookings).toFixed(2)) : 0,
       }))
       .sort((a, b) => b.bookings - a.bookings)
       .slice(0, 10),
@@ -343,10 +498,10 @@ export async function fetchCloudbedsData(
     operationalData: {
       checkIns,
       checkOuts,
-      inHouse: 0,
-      stayOver: 0,
+      inHouse,
+      stayOver: stayOvers,
       noShows,
-      cancellations: 0,
+      cancellations,
     },
     adr: parseFloat(adr.toFixed(2)),
     revpar: parseFloat(revpar.toFixed(2)),

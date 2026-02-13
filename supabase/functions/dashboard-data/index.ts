@@ -150,6 +150,9 @@ Deno.serve(async (req) => {
       dailyData: cloudbedsData.dailyData,
       platformData: cloudbedsData.platformData,
       operationalData: cloudbedsData.operationalData,
+      overallOccupancy: cloudbedsData.overallOccupancy,
+      totalBedsLeft: cloudbedsData.totalBedsLeft,
+      totalCapacity: cloudbedsData.totalCapacity,
       gaTopPages: gaData?.topPages ?? [],
       gaDailyTrend: gaData?.dailyTrend ?? [],
     };

@@ -9,9 +9,9 @@ const Dashboard = () => {
   const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [dateRange, setDateRange] = useState({
-    start: new Date(new Date().setDate(new Date().getDate() - 28)),
+    start: new Date(new Date().setHours(0, 0, 0, 0)),
     end: new Date(),
-    label: 'Last 28 days'
+    label: 'Today'
   });
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
@@ -1205,7 +1205,7 @@ const Dashboard = () => {
                         outerRadius={100}
                         label={(entry) => `${entry.country}: ${entry.bookings}`}
                       >
-                        {countryData.map((entry, index) => (
+                        {dashboardData.countryData.map((entry, index) => (
                           <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                         ))}
                       </Pie>
@@ -1331,7 +1331,7 @@ const Dashboard = () => {
                         outerRadius={100}
                         label={(entry) => `${entry.name}: ${entry.value}`}
                       >
-                        {platformData.map((entry, index) => (
+                        {dashboardData.platformData.map((entry, index) => (
                           <Cell key={`cell-${index}`} fill={entry.color} />
                         ))}
                       </Pie>
