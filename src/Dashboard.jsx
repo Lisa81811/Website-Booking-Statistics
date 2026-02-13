@@ -62,8 +62,8 @@ const Dashboard = () => {
           'apikey': SUPABASE_ANON_KEY
         },
         body: JSON.stringify({
-          startDate: dateRange.start.toISOString(),
-          endDate: dateRange.end.toISOString()
+          startDate: `${dateRange.start.getFullYear()}-${String(dateRange.start.getMonth()+1).padStart(2,'0')}-${String(dateRange.start.getDate()).padStart(2,'0')}`,
+          endDate: `${dateRange.end.getFullYear()}-${String(dateRange.end.getMonth()+1).padStart(2,'0')}-${String(dateRange.end.getDate()).padStart(2,'0')}`
         })
       });
 

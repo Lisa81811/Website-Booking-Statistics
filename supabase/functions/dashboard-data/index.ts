@@ -115,8 +115,8 @@ Deno.serve(async (req) => {
 
   try {
     const { startDate, endDate } = await req.json();
-    const apiStartDate = new Date(startDate).toISOString().split("T")[0];
-    const apiEndDate = new Date(endDate).toISOString().split("T")[0];
+    const apiStartDate = startDate.split("T")[0];
+    const apiEndDate = endDate.split("T")[0];
 
     const properties = loadProperties();
 
